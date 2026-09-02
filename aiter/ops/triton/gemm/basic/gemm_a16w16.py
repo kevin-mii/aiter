@@ -200,6 +200,7 @@ def gemm_a16w16_(
             num_warps = config["num_warps"]
             num_stages = config.get("num_stages", 0)
             waves_per_eu = config.get("waves_per_eu", 0)
+            L2_PREFETCH_DISTANCE = config.get("L2_PREFETCH_DISTANCE", 0)
             NUM_KSPLIT = config.get("NUM_KSPLIT", 1)
 
             # Compute split-K parameters
@@ -257,6 +258,16 @@ def gemm_a16w16_(
 
             NUM_SMS = 256
 
+            # only the compute_bound kernel implements the l2 prefetch
+            extra_kwargs = {}
+            if kernel_type == "compute_bound":
+                extra_kwargs["L2_PREFETCH_DISTANCE"] = L2_PREFETCH_DISTANCE
+            elif L2_PREFETCH_DISTANCE:
+                raise ValueError(
+                    "L2_PREFETCH_DISTANCE requires kernel_type='compute_bound', "
+                    f"got '{kernel_type}'"
+                )
+
             _GLUON_PERSISTENT_KERNEL_MAP[kernel_type][(NUM_SMS,)](
                 x,
                 w,
@@ -290,6 +301,7 @@ def gemm_a16w16_(
                 num_warps=num_warps,
                 num_stages=num_stages,
                 waves_per_eu=waves_per_eu,
+                **extra_kwargs,
             )
 
             if NUM_KSPLIT > 1:

@@ -324,6 +324,7 @@ def gemm_a16w16_persistent_compute_bound_kernel_(
     num_warps: gl.constexpr,
     num_stages: gl.constexpr = 0,
     waves_per_eu: gl.constexpr = 0,
+    L2_PREFETCH_DISTANCE: gl.constexpr = 0,
 ):
 
     WRITES_FINAL: gl.constexpr = NUM_KSPLIT == 1
@@ -510,6 +511,34 @@ def gemm_a16w16_persistent_compute_bound_kernel_(
             cur_a = next_a
             cur_b = next_b
             compute_idx += 1
+
+        if L2_PREFETCH_DISTANCE > 0:
+            next_tile_id = tile_id + NUM_SMS
+            do_prefetch = next_tile_id < num_tiles
+            nt = remap_xcd(next_tile_id, num_tiles, NUM_XCDS=8)
+            n_pid_k = nt % NUM_KSPLIT
+            n_pid = nt // NUM_KSPLIT
+            next_m_off = (n_pid // num_pid_n) * BLOCK_M
+            next_n_off = (n_pid % num_pid_n) * BLOCK_N
+            next_sk_start = n_pid_k * SPLITK_BLOCK_SIZE
+            for pf in gl.static_range(L2_PREFETCH_DISTANCE):
+                gl.amd.gfx1250.tdm.prefetch(
+                    a_desc,
+                    [next_m_off, next_sk_start + pf * BLOCK_K],
+                    pred=do_prefetch,
+                )
+                if TRANSPOSE:
+                    gl.amd.gfx1250.tdm.prefetch(
+                        b_desc,
+                        [next_sk_start + pf * BLOCK_K, next_n_off],
+                        pred=do_prefetch,
+                    )
+                else:
+                    gl.amd.gfx1250.tdm.prefetch(
+                        b_desc,
+                        [next_n_off, next_sk_start + pf * BLOCK_K],
+                        pred=do_prefetch,
+                    )
 
         # epilogue: drain remaining prefetched k-tiles
         for i in gl.static_range(PD - 1):

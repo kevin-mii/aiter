@@ -44,6 +44,7 @@
         "NUM_KSPLIT": 1,
         "kernel_type": "compute_bound",
         "num_stages": 1,
-        "waves_per_eu": 1
+        "waves_per_eu": 1,
+        "L2_PREFETCH_DISTANCE": 1
     }
 }
