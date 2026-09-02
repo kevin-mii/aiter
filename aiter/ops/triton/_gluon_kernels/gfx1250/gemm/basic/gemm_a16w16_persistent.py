@@ -421,7 +421,8 @@ def gemm_a16w16_persistent_compute_bound_kernel_(
             gl.minimum(sk_start + SPLITK_BLOCK_SIZE, K) - sk_start, BLOCK_K
         )
 
-        # prologue: prefetch this tile's leading PD k-tiles at the top of the loop
+        # prologue
+        # split into two loops to reduce sgpr spills
         for pf in gl.static_range(PD):
             gl.amd.gfx1250.tdm.async_load(
                 a_desc,
