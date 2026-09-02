@@ -428,6 +428,7 @@ def gemm_a16w16_persistent_compute_bound_kernel_(
                 [m_off, sk_start + pf * BLOCK_K],
                 a_buffer.index(pf % NUM_BUFFERS),
             )
+        for pf in gl.static_range(PD):
             if TRANSPOSE:
                 gl.amd.gfx1250.tdm.async_load(
                     b_desc,
