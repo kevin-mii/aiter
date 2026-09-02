@@ -185,13 +185,6 @@ def gemm_a16w16_persistent_kernel_(
                 (BLOCK_M, BLOCK_N), dtype=gl.float32, layout=WMMA_LAYOUT
             )
 
-            if ADD_BIAS and pid_k == 0:
-                offs_bias = n_off + gl.arange(
-                    0, BLOCK_N, layout=gl.SliceLayout(0, WMMA_LAYOUT)
-                )
-                bias_vals = gl.load(bias_ptr + offs_bias, mask=offs_bias < N, other=0.0)
-                accumulator = accumulator + bias_vals[None, :]
-
             # prologue: fill buffers with tiles
             for _ in gl.static_range(NUM_BUFFERS - 1):
                 gl.amd.gfx1250.tdm.async_load(
@@ -270,6 +263,13 @@ def gemm_a16w16_persistent_kernel_(
                     )
                 accumulator = gl.amd.gfx1250.wmma(cur_a, cur_b, accumulator)
                 compute_idx += 1
+
+            if ADD_BIAS and pid_k == 0:
+                offs_bias = n_off + gl.arange(
+                    0, BLOCK_N, layout=gl.SliceLayout(0, WMMA_LAYOUT)
+                )
+                bias_vals = gl.load(bias_ptr + offs_bias, mask=offs_bias < N, other=0.0)
+                accumulator = accumulator + bias_vals[None, :]
 
             if USE_ACTIVATION and WRITES_FINAL:
                 accumulator = activation(accumulator)
@@ -421,15 +421,13 @@ def gemm_a16w16_persistent_compute_bound_kernel_(
             gl.minimum(sk_start + SPLITK_BLOCK_SIZE, K) - sk_start, BLOCK_K
         )
 
-        # prologue
-        # split into two loops to reduce sgpr spills
+        # prologue: prefetch this tile's leading PD k-tiles at the top of the loop
         for pf in gl.static_range(PD):
             gl.amd.gfx1250.tdm.async_load(
                 a_desc,
                 [m_off, sk_start + pf * BLOCK_K],
                 a_buffer.index(pf % NUM_BUFFERS),
             )
-        for pf in gl.static_range(PD):
             if TRANSPOSE:
                 gl.amd.gfx1250.tdm.async_load(
                     b_desc,
@@ -447,12 +445,6 @@ def gemm_a16w16_persistent_compute_bound_kernel_(
         compute_idx = 0
 
         accumulator = gl.zeros((BLOCK_M, BLOCK_N), dtype=gl.float32, layout=WMMA_LAYOUT)
-        if ADD_BIAS and pid_k == 0:
-            offs_bias = n_off + gl.arange(
-                0, BLOCK_N, layout=gl.SliceLayout(0, WMMA_LAYOUT)
-            )
-            bias_vals = gl.load(bias_ptr + offs_bias, mask=offs_bias < N, other=0.0)
-            accumulator = accumulator + bias_vals[None, :]
 
         gl.amd.gfx1250.tdm.async_wait((PD - 1) * 2)
 
@@ -566,6 +558,13 @@ def gemm_a16w16_persistent_compute_bound_kernel_(
             compute_idx += 1
 
         accumulator = gl.amd.gfx1250.wmma(cur_a, cur_b, accumulator)
+
+        if ADD_BIAS and pid_k == 0:
+            offs_bias = n_off + gl.arange(
+                0, BLOCK_N, layout=gl.SliceLayout(0, WMMA_LAYOUT)
+            )
+            bias_vals = gl.load(bias_ptr + offs_bias, mask=offs_bias < N, other=0.0)
+            accumulator = accumulator + bias_vals[None, :]
 
         if USE_ACTIVATION and WRITES_FINAL:
             accumulator = activation(accumulator)
