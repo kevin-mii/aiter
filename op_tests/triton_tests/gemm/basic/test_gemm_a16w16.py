@@ -222,7 +222,12 @@ def test_gemm_a16_w16_atomic_layout(M: int, N: int, K: int, layout):
 @pytest.mark.parametrize("output", [True, False])
 @pytest.mark.parametrize("layout", ["TN", "TT"])
 @pytest.mark.parametrize("backend", ["triton", "gluon"])
-def test_gemm_a16w16_persistent_output(M: int, N: int, K: int, layout, output, backend):
+@pytest.mark.parametrize("kernel_type", ["bandwidth_bound", "compute_bound"])
+def test_gemm_a16w16_persistent_output(
+    M: int, N: int, K: int, layout, output, backend, kernel_type
+):
+    if backend == "triton" and kernel_type != "bandwidth_bound":
+        pytest.skip("kernel_type only applies to the gluon backend")
     if backend == "gluon" and not is_gluon_supported():
         pytest.skip("Gluon not supported on this architecture")
     if backend == "triton":
@@ -241,11 +246,23 @@ def test_gemm_a16w16_persistent_output(M: int, N: int, K: int, layout, output, b
 
     if output:
         triton_out = gemm_a16w16(
-            x, w, None, torch.bfloat16, y, backend=backend, persistent=True
+            x,
+            w,
+            None,
+            torch.bfloat16,
+            y,
+            backend=backend,
+            kernel_type=kernel_type,
+            persistent=True,
         )
     else:
         triton_out = gemm_a16w16(
-            x, w, dtype=torch.bfloat16, backend=backend, persistent=True
+            x,
+            w,
+            dtype=torch.bfloat16,
+            backend=backend,
+            kernel_type=kernel_type,
+            persistent=True,
         )
 
     torch.testing.assert_close(triton_out, torch_out, atol=1e-1, rtol=1e-1)
