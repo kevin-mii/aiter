@@ -63,6 +63,8 @@ BLOCK_SIZE_M = 32
 # Default is Opus. Set AITER_USE_FLYDSL_MOE_SORTING=1 to prefer FlyDSL.
 _USE_CK_MOE_SORTING = os.environ.get("AITER_USE_CK_MOE_SORTING", "0") == "1"
 _USE_FLYDSL_MOE_SORTING = os.environ.get("AITER_USE_FLYDSL_MOE_SORTING", "0") == "1"
+# Set AITER_USE_SMALL_M_MOE_SORTING=1 to sort decode batches (<= 64 rows) in one Triton launch.
+_USE_SMALL_M_MOE_SORTING = os.environ.get("AITER_USE_SMALL_M_MOE_SORTING", "0") == "1"
 # "adaptive sort" backend selection (mxfp4 sort as a general World-1 backend):
 #   auto (default) / adaptive -> use the adaptive branch. NO shape fallback: the
 #     kernel is codegen'd for a fixed shape set (SHAPES in
@@ -547,6 +549,68 @@ def _flydsl_moe_sorting(
     return sorted_ids, sorted_weights, sorted_expert_ids, num_valid_ids, moe_buf
 
 
+def _small_m_moe_sorting(
+    topk_ids,
+    topk_weights,
+    num_experts,
+    model_dim,
+    moebuf_dtype,
+    block_size,
+    expert_mask,
+    num_local_tokens,
+    dispatch_policy,
+    return_local_topk_ids,
+    accumulate,
+    flat,
+    output_aux,
+    output,
+):
+    """moe_sorting's outputs from one Triton launch, or None when the call is not one
+    it serves (more rows, EP token counts, a flat/aux/in-place request, other dtypes).
+    """
+    from aiter.ops.triton.moe.moe_sorting_small import (
+        MOE_SORTING_SMALL_MAX_TOKENS,
+        cached_local_expert_ids,
+        moe_sorting_small,
+    )
+
+    if not (
+        topk_ids.shape[0] <= MOE_SORTING_SMALL_MAX_TOKENS
+        and num_local_tokens is None
+        and dispatch_policy == 0
+        and not return_local_topk_ids
+        and not flat
+        and not output_aux
+        and output is None
+        and topk_ids.dtype == torch.int32
+        and topk_ids.is_contiguous()
+        and topk_weights.dtype == torch.float32
+        and topk_weights.is_contiguous()
+        and block_size > 0
+        and block_size & (block_size - 1) == 0
+        and (
+            expert_mask is None
+            or (expert_mask.dim() == 1 and expert_mask.numel() == num_experts)
+        )
+    ):
+        return None
+    local = cached_local_expert_ids(expert_mask, num_experts, topk_ids.device)
+    if local is None:
+        return None
+    local_ids, num_local = local
+    return moe_sorting_small(
+        topk_ids,
+        topk_weights,
+        local_ids,
+        num_local,
+        num_experts,
+        model_dim,
+        moebuf_dtype,
+        block_size,
+        zero_moe_buf=expert_mask is not None or bool(accumulate),
+    )
+
+
 def moe_sorting(
     topk_ids,
     topk_weights,
@@ -563,6 +627,25 @@ def moe_sorting(
     output_aux=False,
     output=None,
 ):
+    if _USE_SMALL_M_MOE_SORTING:
+        sorted_small = _small_m_moe_sorting(
+            topk_ids,
+            topk_weights,
+            num_experts,
+            model_dim,
+            moebuf_dtype,
+            block_size,
+            expert_mask,
+            num_local_tokens,
+            dispatch_policy,
+            return_local_topk_ids,
+            accumulate,
+            flat,
+            output_aux,
+            output,
+        )
+        if sorted_small is not None:
+            return sorted_small
     if (
         not _USE_CK_MOE_SORTING
         and _USE_FLYDSL_MOE_SORTING

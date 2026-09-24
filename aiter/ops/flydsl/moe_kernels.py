@@ -1035,6 +1035,21 @@ def _run_moe_reduction(
     fp8_pitch_align=None,
 ):
     """Topk reduction epilogue for stage2 reduce mode."""
+    from aiter.ops.triton.moe.moe_topk_reduce_add import try_reduce_shared_add
+
+    if try_reduce_shared_add(
+        target,
+        out,
+        token_num,
+        topk,
+        model_dim,
+        expert_mask,
+        topk_ids,
+        stream,
+        is_fp8,
+        topk_weights,
+    ):
+        return
     use_mask = expert_mask is not None
     if use_mask and topk_ids is None:
         raise ValueError(
